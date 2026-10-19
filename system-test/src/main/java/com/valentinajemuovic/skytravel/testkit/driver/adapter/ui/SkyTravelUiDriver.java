@@ -1,0 +1,318 @@
+package com.valentinajemuovic.skytravel.testkit.driver.adapter.ui;
+
+import com.microsoft.playwright.Browser;
+import com.valentinajemuovic.skytravel.testkit.driver.adapter.shared.client.http.TestUser;
+import com.valentinajemuovic.skytravel.testkit.driver.adapter.ui.client.SkyTravelUiClient;
+import com.valentinajemuovic.skytravel.testkit.driver.adapter.ui.client.pages.CouponManagementPage;
+import com.valentinajemuovic.skytravel.testkit.driver.adapter.ui.client.pages.HomePage;
+import com.valentinajemuovic.skytravel.testkit.driver.adapter.ui.client.pages.NewOrderPage;
+import com.valentinajemuovic.skytravel.testkit.driver.adapter.ui.client.pages.OrderDetailsPage;
+import com.valentinajemuovic.skytravel.testkit.driver.adapter.ui.client.pages.OrderHistoryPage;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.BrowseCouponsRequest;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.BrowseCouponsResponse;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.BrowseOrderHistoryRequest;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.BrowseOrderHistoryResponse;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.CancelOrderRequest;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.CancelOrderResponse;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.DeliverOrderRequest;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.DeliverOrderResponse;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.GoToSkyTravelRequest;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.GoToSkyTravelResponse;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.PlaceOrderRequest;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.PlaceOrderResponse;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.PublishCouponRequest;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.PublishCouponResponse;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.ViewOrderRequest;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.ViewOrderResponse;
+import com.valentinajemuovic.skytravel.testkit.driver.port.SkyTravelDriver;
+import com.valentinajemuovic.skytravel.testkit.driver.port.UserIdentity;
+import com.valentinajemuovic.skytravel.testkit.driver.port.dtos.error.SystemError;
+import com.valentinajemuovic.skytravel.testkit.common.Result;
+
+import static com.valentinajemuovic.skytravel.testkit.dsl.core.usecase.commons.SystemResults.failure;
+import static com.valentinajemuovic.skytravel.testkit.dsl.core.usecase.commons.SystemResults.success;
+
+public class SkyTravelUiDriver implements SkyTravelDriver {
+    private final SkyTravelUiClient client;
+
+    private TestUser requestedUser;
+    private Page currentPage = Page.NONE;
+    private HomePage homePage;
+    private NewOrderPage newOrderPage;
+    private OrderHistoryPage orderHistoryPage;
+    private OrderDetailsPage orderDetailsPage;
+    private CouponManagementPage couponManagementPage;
+
+    public SkyTravelUiDriver(String baseUrl, Browser browser) {
+        this(baseUrl, browser, null);
+    }
+
+    public SkyTravelUiDriver(String baseUrl, Browser browser, String keycloakBaseUrl) {
+        this.client = new SkyTravelUiClient(baseUrl, browser, keycloakBaseUrl);
+    }
+
+    @Override
+    public void close() {
+        client.close();
+    }
+
+    @Override
+    public void actAs(UserIdentity identity) {
+        requestedUser = switch (identity.kind()) {
+            case DEFAULT -> null;
+            case CUSTOMER -> TestUser.customer(identity.customerIndex());
+            case ADMIN -> TestUser.ADMIN;
+            case ANONYMOUS -> throw new UnsupportedOperationException("The UI requires a logged-in user");
+        };
+    }
+
+    @Override
+    public Result<GoToSkyTravelResponse, SystemError> goToSkyTravel(GoToSkyTravelRequest request) {
+        homePage = client.openHomePage();
+
+        if (!client.isStatusOk() || !client.isPageLoaded()) {
+            return failure("Failed to load home page");
+        }
+
+        currentPage = Page.HOME;
+        return success(GoToSkyTravelResponse.builder().build());
+    }
+
+    @Override
+    public Result<PlaceOrderResponse, SystemError> placeOrder(PlaceOrderRequest request) {
+        actAs(TestUser.CUSTOMER);
+        var sku = request.getSku();
+        var quantity = request.getQuantity();
+        var country = request.getCountry();
+        var couponCode = request.getCouponCode();
+
+        ensureOnNewOrderPage();
+        newOrderPage.inputSku(sku);
+        newOrderPage.inputQuantity(quantity);
+        newOrderPage.inputCountry(country);
+        if (couponCode != null && !couponCode.isBlank()) {
+            newOrderPage.inputCouponCode(couponCode);
+        }
+        newOrderPage.clickPlaceOrder();
+
+        var result = newOrderPage.getResult();
+
+        if (result.isFailure()) {
+            return failure(result.getError());
+        }
+
+        var orderNumberValue = NewOrderPage.getOrderNumber(result.getValue());
+
+        var response = PlaceOrderResponse.builder().orderNumber(orderNumberValue).build();
+        return Result.success(response);
+    }
+
+    @Override
+    public Result<CancelOrderResponse, SystemError> cancelOrder(CancelOrderRequest request) {
+        switchToRequestedUser();
+        var viewResult = viewOrder(ViewOrderRequest.builder().orderNumber(request.getOrderNumber()).build());
+
+        if (viewResult.isFailure()) {
+            return failure(viewResult.getError());
+        }
+
+        orderDetailsPage.clickCancelOrder();
+
+        var result = orderDetailsPage.getResult();
+
+        if (result.isFailure()) {
+            return failure(result.getError());
+        }
+
+        return success(CancelOrderResponse.builder().build());
+    }
+
+    @Override
+    public Result<DeliverOrderResponse, SystemError> deliverOrder(DeliverOrderRequest request) {
+        actAs(TestUser.ADMIN);
+        var viewResult = viewOrder(ViewOrderRequest.builder().orderNumber(request.getOrderNumber()).build());
+
+        if (viewResult.isFailure()) {
+            return failure(viewResult.getError());
+        }
+
+        orderDetailsPage.clickDeliverOrder();
+
+        var result = orderDetailsPage.getResult();
+
+        if (result.isFailure()) {
+            return failure(result.getError());
+        }
+
+        return success(DeliverOrderResponse.builder().build());
+    }
+
+    @Override
+    public Result<ViewOrderResponse, SystemError> viewOrder(ViewOrderRequest request) {
+        switchToRequestedUser();
+        var orderNumber = request.getOrderNumber();
+        var result = ensureOnOrderDetailsPage(orderNumber);
+        if (result.isFailure()) {
+            return failure(result.getError());
+        }
+
+        var isSuccess = orderDetailsPage.isLoadedSuccessfully();
+
+        if (!isSuccess) {
+            return Result.failure(result.getError());
+        }
+
+        var displayOrderNumber = orderDetailsPage.getOrderNumber();
+        var orderTimestamp = orderDetailsPage.getOrderTimestamp();
+        var sku = orderDetailsPage.getSku();
+        var quantity = orderDetailsPage.getQuantity();
+        var country = orderDetailsPage.getCountry();
+        var unitPrice = orderDetailsPage.getUnitPrice();
+        var basePrice = orderDetailsPage.getBasePrice();
+        var discountRate = orderDetailsPage.getDiscountRate();
+        var discountAmount = orderDetailsPage.getDiscountAmount();
+        var subtotalPrice = orderDetailsPage.getSubtotalPrice();
+        var taxRate = orderDetailsPage.getTaxRate();
+        var taxAmount = orderDetailsPage.getTaxAmount();
+        var totalPrice = orderDetailsPage.getTotalPrice();
+        var status = orderDetailsPage.getStatus();
+        var appliedCoupon = orderDetailsPage.getAppliedCoupon();
+
+        var response = ViewOrderResponse.builder()
+                .orderNumber(displayOrderNumber)
+                .orderTimestamp(orderTimestamp)
+                .sku(sku)
+                .quantity(quantity)
+                .country(country)
+                .unitPrice(unitPrice)
+                .basePrice(basePrice)
+                .discountRate(discountRate)
+                .discountAmount(discountAmount)
+                .subtotalPrice(subtotalPrice)
+                .taxRate(taxRate)
+                .taxAmount(taxAmount)
+                .totalPrice(totalPrice)
+                .status(status)
+                .appliedCouponCode(appliedCoupon)
+                .build();
+
+        return success(response);
+    }
+
+    @Override
+    public Result<BrowseOrderHistoryResponse, SystemError> browseOrderHistory(BrowseOrderHistoryRequest request) {
+        throw new UnsupportedOperationException("Browsing order history is only supported through the API channel");
+    }
+
+    @Override
+    public Result<PublishCouponResponse, SystemError> publishCoupon(PublishCouponRequest request) {
+        actAs(TestUser.ADMIN);
+        ensureOnCouponManagementPage();
+
+        couponManagementPage.inputCouponCode(request.getCode());
+        couponManagementPage.inputDiscountRate(request.getDiscountRate());
+        couponManagementPage.inputValidFrom(request.getValidFrom());
+        couponManagementPage.inputValidTo(request.getValidTo());
+        couponManagementPage.inputUsageLimit(request.getUsageLimit());
+        couponManagementPage.clickPublishCoupon();
+
+        return couponManagementPage.getResult()
+                .map(value -> PublishCouponResponse.builder().build());
+    }
+
+    @Override
+    public Result<BrowseCouponsResponse, SystemError> browseCoupons(BrowseCouponsRequest request) {
+        actAs(TestUser.ADMIN);
+        navigateToCouponManagementPage();
+
+        var coupons = couponManagementPage.readCoupons();
+
+        var response = BrowseCouponsResponse.builder()
+                .coupons(coupons)
+                .build();
+
+        return success(response);
+    }
+
+    // --- identity ---
+
+    /** Operations that have no default user run as the requested identity, or keep the current user when none was requested. */
+    private void switchToRequestedUser() {
+        if (requestedUser != null) {
+            actAs(requestedUser);
+        }
+    }
+
+    /** An explicitly requested identity wins; otherwise admin-only operations run as admin and order placement as customer. */
+    private void actAs(TestUser operationDefault) {
+        var user = requestedUser != null ? requestedUser : operationDefault;
+        if (client.switchUser(user)) {
+            currentPage = Page.NONE;
+            homePage = null;
+            newOrderPage = null;
+            orderHistoryPage = null;
+            orderDetailsPage = null;
+            couponManagementPage = null;
+        }
+    }
+
+    // --- page navigation ---
+
+    private HomePage getHomePage() {
+        if (homePage == null || currentPage != Page.HOME) {
+            homePage = client.openHomePage();
+            currentPage = Page.HOME;
+        }
+        return homePage;
+    }
+
+    private void ensureOnNewOrderPage() {
+        if (currentPage != Page.NEW_ORDER) {
+            newOrderPage = getHomePage().clickNewOrder();
+            currentPage = Page.NEW_ORDER;
+        }
+    }
+
+    private void ensureOnCouponManagementPage() {
+        if (currentPage != Page.COUPON_MANAGEMENT) {
+            navigateToCouponManagementPage();
+        }
+    }
+
+    private void navigateToCouponManagementPage() {
+        couponManagementPage = getHomePage().clickCouponManagement();
+        currentPage = Page.COUPON_MANAGEMENT;
+    }
+
+    private void ensureOnOrderHistoryPage() {
+        if (currentPage != Page.ORDER_HISTORY) {
+            orderHistoryPage = getHomePage().clickOrderHistory();
+            currentPage = Page.ORDER_HISTORY;
+        }
+    }
+
+    private Result<Void, SystemError> ensureOnOrderDetailsPage(String orderNumber) {
+        ensureOnOrderHistoryPage();
+        orderHistoryPage.inputOrderNumber(orderNumber);
+        orderHistoryPage.clickSearch();
+
+        var isOrderListed = orderHistoryPage.isOrderListed(orderNumber);
+        if (!isOrderListed) {
+            return failure("Order " + orderNumber + " does not exist.");
+        }
+
+        orderDetailsPage = orderHistoryPage.clickViewOrderDetails(orderNumber);
+        currentPage = Page.ORDER_DETAILS;
+
+        return success();
+    }
+
+    private enum Page {
+        NONE,
+        HOME,
+        NEW_ORDER,
+        ORDER_HISTORY,
+        ORDER_DETAILS,
+        COUPON_MANAGEMENT
+    }
+}

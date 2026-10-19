@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Valentinajemuovic.SkyTravel.Backend.csproj" />
+  <Project Path="Tests\Valentinajemuovic.SkyTravel.Backend.Tests.csproj" />
+</Solution>

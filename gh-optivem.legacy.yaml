@@ -1,0 +1,47 @@
+project:
+    provider: github
+    url: https://github.com/users/valentinajemuovic/projects/7
+repo-strategy: mono-repo
+sonar:
+    organization: valentinajemuovic
+system:
+    architecture: multitier
+    config: docker/systems.yaml
+    db-migration-path: system/db/migrations
+    backend:
+        path: backend
+        repo: valentinajemuovic/test-app-8ee6ebc7-0138f4eee942bdad
+        lang: dotnet
+        sonar-project: valentinajemuovic_test-app-8ee6ebc7-0138f4eee942bdad-backend
+    frontend:
+        path: frontend
+        repo: valentinajemuovic/test-app-8ee6ebc7-0138f4eee942bdad
+        lang: typescript
+        sonar-project: valentinajemuovic_test-app-8ee6ebc7-0138f4eee942bdad-frontend
+system-test:
+    path: system-test
+    repo: valentinajemuovic/test-app-8ee6ebc7-0138f4eee942bdad
+    lang: java
+    config: system-test/tests.legacy.yaml
+    sonar-project: valentinajemuovic_test-app-8ee6ebc7-0138f4eee942bdad-system-test
+    paths:
+        at-test: system-test/src/test/java/com/valentinajemuovic/skytravel/systemtest/latest/acceptance
+        common: system-test/src/main/java/com/valentinajemuovic/skytravel/testkit/common
+        common-domain: system-test/src/main/java/com/valentinajemuovic/skytravel/testkit/common/domain
+        ct-test: system-test/src/test/java/com/valentinajemuovic/skytravel/systemtest/latest/contract
+        dsl-core: system-test/src/main/java/com/valentinajemuovic/skytravel/testkit/dsl/core
+        dsl-port: system-test/src/main/java/com/valentinajemuovic/skytravel/testkit/dsl/port
+        external-system-driver-adapter: system-test/src/main/java/com/valentinajemuovic/skytravel/testkit/driver/adapter/external
+        external-system-driver-port: system-test/src/main/java/com/valentinajemuovic/skytravel/testkit/driver/port/external
+        system-driver-adapter: system-test/src/main/java/com/valentinajemuovic/skytravel/testkit/driver/adapter
+        system-driver-adapter-shared: system-test/src/main/java/com/valentinajemuovic/skytravel/testkit/driver/adapter/shared
+        system-driver-port: system-test/src/main/java/com/valentinajemuovic/skytravel/testkit/driver/port
+    system-driver-adapter-channels:
+        api: system-test/src/main/java/com/valentinajemuovic/skytravel/testkit/driver/adapter/api
+        ui: system-test/src/main/java/com/valentinajemuovic/skytravel/testkit/driver/adapter/ui
+system-name: Sky Travel
+license: mit
+deploy: docker
+channels:
+    - api
+    - ui
